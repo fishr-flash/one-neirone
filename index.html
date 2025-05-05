@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TensorFlow.js: Смещение vs Без смещения</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    canvas { max-width: 600px; }
+    pre { background: #f0f0f0; padding: 10px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h2>Сравнение: с смещением и без</h2>
+  <canvas id="chart"></canvas>
+  <p>
+    Введите x: <input id="inputX" type="number" value="5">
+    <button onclick="predict()">Предсказать</button>
+  </p>
+  <p id="output">Обучение...</p>
+  <pre id="weightsOutput"></pre>
+  <h3>Ошибка по эпохам</h3>
+  <canvas id="lossChart"></canvas>
+
+  <script>
+    let modelWithBias, modelNoBias;
+    const xs = [0, 1, 2, 3, 4];
+    const ys = [1, 3, 5, 7, 9];
+
+    const ctx = document.getElementById('chart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'scatter',
+      data: {
+        datasets: [
+          {
+            label: 'Обучающие данные',
+            data: xs.map((x, i) => ({ x, y: ys[i] })),
+            backgroundColor: 'blue'
+          },
+          {
+            label: 'Без смещения (bias = false)',
+            data: [],
+            showLine: true,
+            borderColor: 'green',
+            backgroundColor: 'transparent'
+          },
+          {
+            label: 'Со смещением (bias = true)',
+            data: [],
+            showLine: true,
+            borderColor: 'red',
+            backgroundColor: 'transparent'
+          }
+        ]
+      },
+      options: {
+        animation: false,
+        scales: {
+          x: { type: 'linear', position: 'bottom' },
+          y: { beginAtZero: true }
+        }
+      }
+    });
+
+    const lossCtx = document.getElementById('lossChart').getContext('2d');
+    const lossChart = new Chart(lossCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Без смещения',
+            data: [],
+            borderColor: 'green',
+            fill: false
+          },
+          {
+            label: 'Со смещением',
+            data: [],
+            borderColor: 'red',
+            fill: false
+          }
+        ]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          x: { title: { display: true, text: 'Эпоха' } },
+          y: { title: { display: true, text: 'Ошибка (loss)' } }
+        }
+      }
+    });
+
+    async function trainModel() {
+      modelNoBias = tf.sequential();
+      modelNoBias.add(tf.layers.dense({ units: 1, inputShape: [1], useBias: false }));
+      modelNoBias.compile({ loss: 'meanSquaredError', optimizer: tf.train.sgd(0.1) });
+
+      modelWithBias = tf.sequential();
+      modelWithBias.add(tf.layers.dense({ units: 1, inputShape: [1], useBias: true }));
+      modelWithBias.compile({ loss: 'meanSquaredError', optimizer: tf.train.sgd(0.1) });
+
+      const inputTensor = tf.tensor1d(xs);
+      const labelTensor = tf.tensor1d(ys);
+
+      const epochs = 100;
+      for (let epoch = 0; epoch < epochs; epoch++) {
+        const h1 = await modelNoBias.fit(inputTensor, labelTensor, { epochs: 1 });
+        const h2 = await modelWithBias.fit(inputTensor, labelTensor, { epochs: 1 });
+
+        updatePredictionCurves();
+        await showWeights();
+
+        // log loss values
+        lossChart.data.labels.push(epoch);
+        lossChart.data.datasets[0].data.push(h1.history.loss[0]);
+        lossChart.data.datasets[1].data.push(h2.history.loss[0]);
+        lossChart.update();
+
+        await new Promise(r => setTimeout(r, 100)); // замедление анимации
+      }
+
+      document.getElementById('output').textContent = 'Обучено. Введите x для предсказания.';
+    }
+
+    async function showWeights() {
+      const wNoBias = await modelNoBias.layers[0].getWeights()[0].data();
+      const wWithBias = await modelWithBias.layers[0].getWeights()[0].data();
+      const bWithBias = await modelWithBias.layers[0].getWeights()[1].data();
+
+      const out = `
+Модель без смещения:
+  w = ${wNoBias[0].toFixed(4)}
+
+Модель со смещением:
+  w = ${wWithBias[0].toFixed(4)}
+  b = ${bWithBias[0].toFixed(4)}
+      `;
+
+      document.getElementById("weightsOutput").textContent = out;
+    }
+
+    function updatePredictionCurves() {
+      const lineX = Array.from({ length: 100 }, (_, i) => i / 10);
+      const input = tf.tensor1d(lineX);
+
+      Promise.all([
+        modelNoBias.predict(input).data(),
+        modelWithBias.predict(input).data()
+      ]).then(([noBiasData, withBiasData]) => {
+        chart.data.datasets[1].data = lineX.map((x, i) => ({ x, y: noBiasData[i] }));
+        chart.data.datasets[2].data = lineX.map((x, i) => ({ x, y: withBiasData[i] }));
+        chart.update();
+      });
+    }
+
+    async function predict() {
+      const x = parseFloat(document.getElementById("inputX").value);
+      if (isNaN(x)) return;
+      const input = tf.tensor1d([x]);
+
+      const [y1, y2] = await Promise.all([
+        modelNoBias.predict(input).data(),
+        modelWithBias.predict(input).data()
+      ]);
+
+      document.getElementById("output").textContent = `Для x = ${x},\nбез смещения: y ≈ ${y1[0].toFixed(2)},\nсо смещением: y ≈ ${y2[0].toFixed(2)}`;
+    }
+
+    trainModel();
+  </script>
+</body>
+</html>
